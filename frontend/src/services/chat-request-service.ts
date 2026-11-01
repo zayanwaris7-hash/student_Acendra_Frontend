@@ -4,18 +4,17 @@ import "server-only";
 import { redirect } from "next/navigation";
 import { isAxiosError } from "axios";
 
-import { getServerApi } from "@/utils/serverapi";
 
 import type {
   ChatRequestsResponse,
 } from "@/types/chatrequest.type";
+import { api } from "@/utils/axios";
 
 export async function getIncomingRequests(
   cursor?: string,
   limit = 20,
 ): Promise<ChatRequestsResponse> {
   try {
-    const api = await getServerApi();
 
     const response = await api.get<ChatRequestsResponse>(
       "/chats/requests/incoming",

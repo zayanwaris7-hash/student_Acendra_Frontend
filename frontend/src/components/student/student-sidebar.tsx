@@ -8,6 +8,7 @@ import {
   LayoutDashboard,
   MessageCircle,
   UserRound,
+  UserSearch,
   FolderKanban,
   Users,
   Settings,
@@ -30,6 +31,11 @@ const menuItems = [
     title: "Requests",
     href: "/student/requests",
     icon: ClipboardList,
+  },
+   {
+    title: "Other Profiles",
+    href: "/student/other-profiles",
+    icon: UserSearch,
   },
   {
     title: "Communication",

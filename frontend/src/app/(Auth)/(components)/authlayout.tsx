@@ -1,4 +1,3 @@
-
 "use client";
 
 import type { ReactNode } from "react";
@@ -21,9 +20,12 @@ export default function AuthLayoutClient({
   const hydrated = useAuthStore((state) => state.hydrated);
 
   useEffect(() => {
-    if (!hydrated) return;
-
-    if (accessToken && refreshToken && isAuthenticated) {
+    if (
+      hydrated &&
+      accessToken &&
+      refreshToken &&
+      isAuthenticated
+    ) {
       router.replace("/student/dashboard");
     }
   }, [
@@ -34,25 +36,23 @@ export default function AuthLayoutClient({
     router,
   ]);
 
-  if (!hydrated) {
-    return (
-      <main className="flex min-h-screen items-center justify-center bg-background">
-        <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
-      </main>
-    );
-  }
-
-  if (accessToken && refreshToken && isAuthenticated) {
-    return (
-      <main className="flex min-h-screen items-center justify-center bg-background">
-        <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
-      </main>
-    );
-  }
-
   return (
     <main className="flex min-h-screen items-center justify-center bg-background px-4 py-10 text-foreground">
-      <div className="w-full max-w-md">{children}</div>
+      <div className="w-full max-w-md">
+        {hydrated ? (
+          accessToken && refreshToken && isAuthenticated ? (
+            <div className="flex justify-center">
+              <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+            </div>
+          ) : (
+            children
+          )
+        ) : (
+          <div className="flex justify-center">
+            <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+          </div>
+        )}
+      </div>
     </main>
   );
 }

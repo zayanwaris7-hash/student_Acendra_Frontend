@@ -1,19 +1,9 @@
-
 import axios, {
   AxiosError,
   InternalAxiosRequestConfig,
 } from "axios";
 
 import { useAuthStore } from "@/store/useAuthStore";
-
-interface AuthTokens {
-  accessToken: string;
-  refreshToken: string;
-}
-
-interface ApiResponse<T> {
-  data: T;
-}
 
 interface RetryConfig extends InternalAxiosRequestConfig {
   _retry?: boolean;
@@ -35,83 +25,67 @@ export const api = axios.create({
   withCredentials: true,
 });
 
-const refreshApi = axios.create({
+export const refreshApi = axios.create({
   baseURL: BASE_URL,
   timeout: 15000,
+  headers: {
+    "Content-Type": "application/json",
+    Accept: "application/json",
+  },
   withCredentials: true,
 });
 
-let refreshPromise: Promise<string> | null = null;
+let refreshPromise: Promise<boolean> | null = null;
 
-function setAccessTokenCookie(token: string) {
-  const secure =
-    window.location.protocol === "https:" ? "; Secure" : "";
+const AUTH_ENDPOINTS = [
+  "/auth/login",
+  "/auth/register",
+  "/auth/refresh",
+  "/auth/verify-otp",
+  "/auth/resend-otp",
+];
 
-  document.cookie =
-    `auth-token=${encodeURIComponent(token)}; Path=/; SameSite=Lax${secure}`;
-}
+function isAuthEndpoint(url?: string): boolean {
+  if (!url) return false;
 
-function clearAccessTokenCookie() {
-  document.cookie =
-    "auth-token=; Path=/; Max-Age=0; SameSite=Lax";
-}
-
-async function refreshAccessToken(): Promise<string> {
-  const { refreshToken } = useAuthStore.getState();
-
-  if (!refreshToken) {
-    throw new Error("Refresh token is unavailable.");
-  }
-
-  const response = await refreshApi.post<
-    ApiResponse<AuthTokens> | AuthTokens
-  >("/auth/refresh", {
-    refreshToken,
+  return AUTH_ENDPOINTS.some((endpoint) => {
+    const normalizedUrl = url.split("?")[0].replace(/\/+$/, "");
+    return normalizedUrl.endsWith(endpoint);
   });
-
-  const tokens =
-    "data" in response.data
-      ? response.data.data
-      : response.data;
-
-  if (!tokens?.accessToken || !tokens?.refreshToken) {
-    throw new Error("Invalid refresh token response.");
-  }
-
-  useAuthStore.setState({
-    accessToken: tokens.accessToken,
-    refreshToken: tokens.refreshToken,
-    isAuthenticated: true,
-  });
-
-  setAccessTokenCookie(tokens.accessToken);
-
-  return tokens.accessToken;
 }
 
-// Attach access token to every browser request.
-api.interceptors.request.use((config) => {
-  const accessToken = useAuthStore.getState().accessToken;
+// Attach the current access token to browser requests.
+api.interceptors.request.use(
+  (config) => {
+    // Zustand's persisted browser state is not available during SSR.
+    if (typeof window === "undefined") {
+      return config;
+    }
 
-  if (accessToken) {
-    config.headers.set(
-      "Authorization",
-      `Bearer ${accessToken}`,
-    );
-  }
+    const accessToken = useAuthStore.getState().accessToken;
 
-  return config;
-});
+    if (accessToken) {
+      config.headers.set(
+        "Authorization",
+        `Bearer ${accessToken}`,
+      );
+    } else {
+      config.headers.delete("Authorization");
+    }
 
-// Automatically refresh expired access tokens.
+    return config;
+  },
+  (error: unknown) => Promise.reject(error),
+);
+
+// Refresh expired tokens and retry failed requests.
 api.interceptors.response.use(
   (response) => response,
 
   async (error: AxiosError) => {
-    const originalRequest = error.config as
-      | RetryConfig
-      | undefined;
+    const originalRequest = error.config as RetryConfig | undefined;
 
+    // Only handle unauthorized responses.
     if (
       error.response?.status !== 401 ||
       !originalRequest ||
@@ -120,34 +94,51 @@ api.interceptors.response.use(
       return Promise.reject(error);
     }
 
-    const excludedEndpoints = [
-      "/auth/login",
-      "/auth/register",
-      "/auth/refresh",
-      "/auth/verify-otp",
-      "/auth/resend-otp",
-    ];
+    // Do not access browser authentication state during SSR.
+    if (typeof window === "undefined") {
+      return Promise.reject(error);
+    }
 
-    if (
-      excludedEndpoints.some((url) =>
-        originalRequest.url?.includes(url),
-      )
-    ) {
+    // Never refresh when the authentication endpoint itself fails.
+    if (isAuthEndpoint(originalRequest.url)) {
+      return Promise.reject(error);
+    }
+
+    const authStore = useAuthStore.getState();
+
+    // No access token means there is no authenticated request to refresh.
+    if (!authStore.accessToken) {
       return Promise.reject(error);
     }
 
     originalRequest._retry = true;
 
     try {
-      // All simultaneous 401 requests share one refresh call.
+      // Share one refresh operation across simultaneous 401 responses.
       if (!refreshPromise) {
-        refreshPromise = refreshAccessToken().finally(() => {
-          refreshPromise = null;
-        });
+        refreshPromise = useAuthStore
+          .getState()
+          .refreshTokens()
+          .finally(() => {
+            refreshPromise = null;
+          });
       }
 
-      const newAccessToken = await refreshPromise;
+      const refreshSucceeded = await refreshPromise;
 
+      if (!refreshSucceeded) {
+        return Promise.reject(error);
+      }
+
+      // Read the latest token after refresh has completed.
+      const newAccessToken = useAuthStore.getState().accessToken;
+
+      if (!newAccessToken) {
+        useAuthStore.getState().logout();
+        return Promise.reject(error);
+      }
+
+      // Retry the original request with the new token.
       originalRequest.headers.set(
         "Authorization",
         `Bearer ${newAccessToken}`,
@@ -156,7 +147,6 @@ api.interceptors.response.use(
       return api(originalRequest);
     } catch (refreshError) {
       useAuthStore.getState().logout();
-      clearAccessTokenCookie();
 
       if (!window.location.pathname.startsWith("/login")) {
         window.location.replace("/login");
